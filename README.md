@@ -2,20 +2,35 @@
 
 An event check-in app with a Next.js frontend, a small Express API, and Supabase Postgres.
 
+The API and the Next.js app are separate packages. Install and run each one from its own directory. The repo root is the API, so `npm install` there does not install React or Next.js.
+
 ## Setup
 
-1. Create a Supabase project and copy `.env.example` to `.env`.
+1. Create a Supabase project and copy `.env.example` to `.env` in the repo root.
 2. Set `SUPABASE_URL` and the server-only `SUPABASE_SECRET_KEY` in `.env`. Keep this key out of browser code and source control.
-3. Set `NEXT_PUBLIC_API_URL` to the Express API origin. For local development, the example uses `http://localhost:4000`.
+3. Set `NEXT_PUBLIC_API_URL` in `frontend/.env` to the Express API origin. For local development, use `http://localhost:4000`.
 4. Apply `supabase/migrations/20261114000000_create_attendance.sql` to the Supabase project, either with the Supabase CLI (`supabase db push`) or the SQL editor.
-5. Start the API and frontend in separate terminals:
+5. Install and start the API from the repo root, and the frontend from `frontend/`:
 
    ```sh
-   npm run dev:api
+   npm install
    npm run dev
    ```
 
-The API listens on port `4000` by default. Set `API_PORT` or `API_CORS_ORIGIN` in `.env` to change its port or accepted frontend origin.
+   ```sh
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+On the EC2 instance, install and run only the API from the repo root. `tsx` is a runtime dependency, so `npm install --omit=dev` is enough:
+
+```sh
+npm install --omit=dev
+npm start
+```
+
+The API listens on port `4000` by default. Set `API_PORT` or `API_CORS_ORIGIN` in the root `.env` to change its port or accepted frontend origin.
 
 ## Data and behavior
 
