@@ -8,7 +8,7 @@ import {
   recordAttendance,
   registerAndAttend,
   type AttendanceDatabase,
-} from "./db.js";
+} from "./db.ts";
 
 export function createApp(db: AttendanceDatabase, now: () => Date = () => new Date()) {
   const app = express();

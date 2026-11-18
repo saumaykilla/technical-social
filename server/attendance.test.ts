@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
-import { createApp } from "./app.js";
-import { openDatabase } from "./db.js";
+import { createApp } from "./app.ts";
+import { openDatabase } from "./db.ts";
 
 async function start(now: () => Date = () => new Date("2026-11-18T15:00:00.000Z")) {
   const db = openDatabase(":memory:");

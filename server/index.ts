@@ -1,6 +1,6 @@
 import "dotenv/config";
-import { createApp } from "./app.js";
-import { openDatabase } from "./db.js";
+import { createApp } from "./app.ts";
+import { openDatabase } from "./db.ts";
 
 const databasePath = process.env.SQLITE_PATH ?? "data/attendance.sqlite";
 const db = openDatabase(databasePath);

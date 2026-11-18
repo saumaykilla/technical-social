@@ -23,7 +23,7 @@ The API and the Next.js app are separate packages. Install and run each one from
    npm run dev
    ```
 
-On the EC2 instance, install and run only the API from the repo root. `tsx` and `better-sqlite3` are runtime dependencies, so `npm install --omit=dev` is enough:
+On the EC2 instance, install and run only the API from the repo root. It needs Node.js 22.18 or newer, which can run the TypeScript server directly:
 
 ```sh
 npm install --omit=dev

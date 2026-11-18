@@ -2,22 +2,23 @@
   "name": "tech-social-api",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
-    "dev": "tsx server/index.ts",
-    "dev:api": "tsx server/index.ts",
-    "start": "tsx server/index.ts",
-    "start:api": "tsx server/index.ts",
-    "test": "tsx --test server/attendance.test.ts"
+    "dev": "node --watch server/index.ts",
+    "dev:api": "node --watch server/index.ts",
+    "start": "node server/index.ts",
+    "start:api": "node server/index.ts",
+    "test": "node --test server/attendance.test.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^13.2.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.10",
-    "express": "^5.3.0",
-    "tsx": "^4.23.15"
+    "express": "^5.3.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^20",

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
-export type AttendanceDatabase = Database.Database;
+export type AttendanceDatabase = DatabaseSync;
 
 export type Profile = {
   id: string;
@@ -52,14 +52,16 @@ const schema = `
   create index if not exists attendance_date_idx on attendance (date);
 `;
 
+const uniqueConstraint = 2067;
+
 export function openDatabase(filename: string): AttendanceDatabase {
   if (filename !== ":memory:") {
     fs.mkdirSync(path.dirname(path.resolve(filename)), { recursive: true });
   }
 
-  const db = new Database(filename);
-  db.pragma("foreign_keys = ON");
-  if (filename !== ":memory:") db.pragma("journal_mode = WAL");
+  const db = new DatabaseSync(filename);
+  db.exec("PRAGMA foreign_keys = ON");
+  if (filename !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   db.exec(schema);
   return db;
 }
@@ -89,9 +91,9 @@ export function recordAttendance(db: AttendanceDatabase, userId: string, date: s
 }
 
 export function registerAndAttend(db: AttendanceDatabase, registration: Registration, date: string): string {
-  const insert = db.transaction(() => {
-    const existing = findUserByEmail(db, registration.email);
-    if (existing) throw new DuplicateEmailError();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (findUserByEmail(db, registration.email)) throw new DuplicateEmailError();
 
     const id = crypto.randomUUID();
     db.prepare(`
@@ -106,16 +108,11 @@ export function registerAndAttend(db: AttendanceDatabase, registration: Registra
       registration.profession,
     );
     recordAttendance(db, id, date);
+    db.exec("COMMIT");
     return id;
-  });
-
-  try {
-    return insert();
   } catch (error) {
-    if (error instanceof DuplicateEmailError) throw error;
-    if (error instanceof Database.SqliteError && error.code === "SQLITE_CONSTRAINT_UNIQUE") {
-      throw new DuplicateEmailError();
-    }
+    db.exec("ROLLBACK");
+    if (error instanceof DuplicateEmailError || isUniqueConstraint(error)) throw new DuplicateEmailError();
     throw error;
   }
 }
@@ -145,4 +142,9 @@ export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
   }
 
   return { profile, visits };
+}
+
+function isUniqueConstraint(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("errcode" in error)) return false;
+  return error.errcode === uniqueConstraint;
 }
