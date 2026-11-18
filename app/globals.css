@@ -13,25 +13,220 @@
   --color-primary: #C65A3A;
 }
 
+/* ==================================================================
+   EVENT THEMES (Himal Shrestha)
+   Every page reads its colors from these --ts-* variables instead of
+   hard-coded colors. Switching <html data-theme="..."> swaps the whole
+   look at once. Organizers pick the theme per event on /admin.
+   ================================================================== */
 
+/* After hours: FiDi skyline at night, warm window-light orange. (The default.) */
+:root,
+[data-theme="after-hours"] {
+  --ts-page-bg: #14121A;
+  --ts-page-image:
+    radial-gradient(ellipse 70% 320px at 50% 105%, rgba(232, 116, 59, 0.22), transparent 70%),
+    radial-gradient(ellipse 50% 240px at 0% 0%, rgba(120, 90, 160, 0.18), transparent 70%);
+  --ts-card: #1C1924;
+  --ts-card-border: #2E2939;
+  --ts-card-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  --ts-text: #F3EDE6;
+  --ts-muted: #A39DAE;
+  --ts-faint: #6F6880;
+  --ts-accent: #E8743B;
+  --ts-on-accent: #14121A;
+  --ts-accent-soft: rgba(232, 116, 59, 0.14);
+  --ts-input-bg: #15131C;
+  --ts-input-border: #3A3446;
+  --ts-row-bg: #221F2B;
+  --ts-row-border: #2E2939;
+  --ts-danger: #FF8A7A;
+  --ts-font-display: var(--font-geist-sans), sans-serif;
+  --ts-radius: 20px;
+  --ts-radius-sm: 12px;
+  --ts-title-spacing: -1px;
+}
+
+/* Ticker: trading-terminal look, amber on near-black, monospace headings. */
+[data-theme="ticker"] {
+  --ts-page-bg: #08090B;
+  --ts-page-image: none;
+  --ts-card: #0F1114;
+  --ts-card-border: #24272D;
+  --ts-card-shadow: 0 0 0 1px rgba(255, 154, 60, 0.06);
+  --ts-text: #ECEAE5;
+  --ts-muted: #8B8F98;
+  --ts-faint: #5B5F68;
+  --ts-accent: #FF9A3C;
+  --ts-on-accent: #0B0D10;
+  --ts-accent-soft: rgba(255, 154, 60, 0.12);
+  --ts-input-bg: #0B0D10;
+  --ts-input-border: #2A2D33;
+  --ts-row-bg: #13161A;
+  --ts-row-border: #22262C;
+  --ts-danger: #FF6B5B;
+  --ts-font-display: var(--font-geist-mono), monospace;
+  --ts-radius: 6px;
+  --ts-radius-sm: 4px;
+  --ts-title-spacing: -0.5px;
+}
+
+/* Secure channel: cybersecurity console, green on black with faint scanlines. */
+[data-theme="secure"] {
+  --ts-page-bg: #04070B;
+  --ts-page-image: repeating-linear-gradient(0deg, rgba(61, 220, 151, 0.035) 0 1px, transparent 1px 4px);
+  --ts-card: #070C12;
+  --ts-card-border: #163126;
+  --ts-card-shadow: 0 0 40px rgba(61, 220, 151, 0.06);
+  --ts-text: #D3F5E6;
+  --ts-muted: #6E8F82;
+  --ts-faint: #456356;
+  --ts-accent: #3DDC97;
+  --ts-on-accent: #04070B;
+  --ts-accent-soft: rgba(61, 220, 151, 0.12);
+  --ts-input-bg: #050A0F;
+  --ts-input-border: #1B3A2E;
+  --ts-row-bg: #0A1219;
+  --ts-row-border: #14291F;
+  --ts-danger: #FF6B6B;
+  --ts-font-display: var(--font-geist-mono), monospace;
+  --ts-radius: 6px;
+  --ts-radius-sm: 4px;
+  --ts-title-spacing: -0.5px;
+}
+
+/* Blueprint: engineering schematic, white lines on blue grid paper. */
+[data-theme="blueprint"] {
+  --ts-page-bg: #0E2A4A;
+  --ts-page-image:
+    linear-gradient(rgba(143, 184, 227, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(143, 184, 227, 0.12) 1px, transparent 1px);
+  --ts-card: #10305A;
+  --ts-card-border: #2B5687;
+  --ts-card-shadow: 0 20px 50px rgba(3, 15, 30, 0.45);
+  --ts-text: #E4EEF9;
+  --ts-muted: #8FB8E3;
+  --ts-faint: #6390C0;
+  --ts-accent: #E4EEF9;
+  --ts-on-accent: #0E2A4A;
+  --ts-accent-soft: rgba(143, 184, 227, 0.16);
+  --ts-input-bg: #0C2643;
+  --ts-input-border: #4A79AC;
+  --ts-row-bg: #12345F;
+  --ts-row-border: #2B5687;
+  --ts-danger: #FFB4A8;
+  --ts-font-display: var(--font-geist-sans), sans-serif;
+  --ts-radius: 4px;
+  --ts-radius-sm: 2px;
+  --ts-title-spacing: -0.5px;
+}
 
 body {
   min-height: 100vh;
   margin: 0;
-  background-color: #FFFCFA;
-
-  background-image:
-    radial-gradient(
-      ellipse 65% 280px at 5% 0%,
-      #FBEDE7 0%,
-      transparent 100%
-    ),
-    radial-gradient(
-      ellipse 65% 280px at 95% 100%,
-      #FBEDE7 0%,
-      transparent 100%
-    );
+  color: var(--ts-text);
+  background-color: var(--ts-page-bg);
+  background-image: var(--ts-page-image);
   background-repeat: no-repeat;
+  transition: background-color 0.3s ease;
 }
 
+/* Blueprint's grid needs to tile across the whole page. */
+[data-theme="blueprint"] body {
+  background-repeat: repeat;
+  background-size: 22px 22px;
+}
+[data-theme="secure"] body {
+  background-repeat: repeat;
+}
 
+/* Form boxes pick up the theme too. */
+input::placeholder {
+  color: var(--ts-faint);
+}
+select option {
+  background: var(--ts-card);
+  color: var(--ts-text);
+}
+
+/* ==================================================================
+   THEME DECORATIONS
+   Each theme has its own small header piece (ticker strip, status line,
+   skyline, spec label). All four are on the page; CSS only shows the one
+   that matches the current theme.
+   ================================================================== */
+.ts-decor {
+  display: none;
+  margin: -6px 0 22px;
+}
+[data-theme="ticker"] .ts-decor-ticker,
+[data-theme="secure"] .ts-decor-secure,
+[data-theme="blueprint"] .ts-decor-blueprint,
+[data-theme="after-hours"] .ts-decor-after-hours {
+  display: block;
+}
+
+/* Ticker: text that scrolls sideways forever, like a stock ticker. */
+.ts-decor-ticker {
+  overflow: hidden;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--ts-card-border);
+  padding-bottom: 8px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  color: var(--ts-accent);
+}
+.ts-ticker-track {
+  display: inline-block;
+  animation: ts-ticker 22s linear infinite;
+}
+@keyframes ts-ticker {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* Secure: status line with a blinking cursor. */
+.ts-decor-secure {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  color: var(--ts-accent);
+  letter-spacing: 0.3px;
+}
+.ts-cursor {
+  animation: ts-blink 1s steps(1) infinite;
+}
+@keyframes ts-blink {
+  50% { opacity: 0; }
+}
+
+/* After hours: a little skyline with lit windows. */
+.ts-skyline {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+}
+.ts-skyline span {
+  width: 10px;
+  background: #2C2836;
+  border-radius: 1px 1px 0 0;
+}
+.ts-skyline span.lit {
+  border-top: 3px solid var(--ts-accent);
+}
+
+/* Blueprint: spec-sheet label. */
+.ts-decor-blueprint {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  color: var(--ts-muted);
+  letter-spacing: 1px;
+  border-bottom: 1px dashed var(--ts-input-border);
+  padding-bottom: 8px;
+}
+
+/* Respect people who turn off animations in their phone/computer settings. */
+@media (prefers-reduced-motion: reduce) {
+  .ts-ticker-track, .ts-cursor { animation: none; }
+}

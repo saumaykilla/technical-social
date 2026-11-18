@@ -1,4 +1,4 @@
-# Tech Social Attendance
+# Technically Social Attendance
 
 An event check-in app with a Next.js frontend, a small Express API, and Supabase Postgres.
 
