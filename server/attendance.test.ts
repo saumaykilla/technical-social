@@ -109,6 +109,25 @@ test("lookup checks an existing attendee in without duplicating the same day", a
   ]);
 });
 
+test("allows each origin listed in API_CORS_ORIGIN", async (t) => {
+  const previous = process.env.API_CORS_ORIGIN;
+  process.env.API_CORS_ORIGIN = "https://technicallysocial.org, https://www.technicallysocial.org";
+  t.after(() => {
+    if (previous === undefined) delete process.env.API_CORS_ORIGIN;
+    else process.env.API_CORS_ORIGIN = previous;
+  });
+
+  const { server, url } = await start();
+  t.after(() => server.close());
+
+  const response = await fetch(`${url}/health`, {
+    headers: { Origin: "https://www.technicallysocial.org" },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), "https://www.technicallysocial.org");
+});
+
 test("lookup reports an unknown email and rejects an invalid one", async (t) => {
   const { server, url } = await start();
   t.after(() => server.close());

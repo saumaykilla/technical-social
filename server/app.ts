@@ -12,9 +12,12 @@ import {
 
 export function createApp(db: AttendanceDatabase, now: () => Date = () => new Date()) {
   const app = express();
-  const allowedOrigin = process.env.API_CORS_ORIGIN ?? "http://localhost:3000";
+  const allowedOrigins = (process.env.API_CORS_ORIGIN ?? "http://localhost:3000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
 
-  app.use(cors({ origin: allowedOrigin }));
+  app.use(cors({ origin: allowedOrigins }));
   app.use(express.json({ limit: "16kb" }));
 
   function utcDate() {

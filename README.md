@@ -30,7 +30,7 @@ npm install --omit=dev
 npm start
 ```
 
-The API listens on port `4000` by default. Set `API_PORT` or `API_CORS_ORIGIN` in the root `.env` to change its port or accepted frontend origin. Keep the `data/` directory on the instance; that file is the whole database.
+The API listens on port `4000` by default. Set `API_PORT` or `API_CORS_ORIGIN` in the root `.env` to change its port or accepted frontend origins. Separate multiple origins with commas. Keep the `data/` directory on the instance; that file is the whole database.
 
 ## Data and behavior
 
