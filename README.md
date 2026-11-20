@@ -45,8 +45,11 @@ Every route is a JSON `POST` and answers in JSON. A failure is a non-2xx status 
 | `/api/attendance/update` | `email`, `name`, `linkedin`, optional `website`, `profession`, `intro`, `tags` | Replaces the name, LinkedIn, website, profession, intro, and topics for that email. An empty `website`, `profession`, or `intro` clears it, and `tags: []` clears the topics. No visit, and the email and tokens stay the same. `404` when the email has no profile. |
 | `/api/attendance/redeem` | `token` (a check-in token) | Checks the token's owner in to the open event. `401` for any other token. |
 | `/api/attendance/profile` | `token` (a profile token) | Returns the owner's name, links, intro, and topics. No email, no visit. `404` for any other token. |
+| `/api/attendance/live` | `email` | Returns `{ visit }`, the open event's list, for the site to poll. `visit` is `null` when that profile is not checked in on the open date. Records no visit and returns no tokens. `400` for an invalid email, `404` when the email has no profile. |
 
-Lookup, register, update, and redeem return `{ profile, visits, tokens }`. `tokens.checkIn` and `tokens.profile` go into the two personal QR codes.
+Lookup, register, update, and redeem return `{ profile, visits, tokens, openDate }`. `tokens.checkIn` and `tokens.profile` go into the two personal QR codes. `openDate` is the date of the event that is open right now, so the site can tell tonight's list from the earlier ones.
+
+Each entry in `visits`, and `visit` from `/live`, is `{ date, event, attendees }`. `event` is `{ name, venue, time }`, or `null` when none of the three is set. Any one of them can be `null` on its own, and `time` is 24-hour `HH:MM` (`"18:30"`). The door code is never part of it.
 
 Each attendee in `visits` carries `visitCount`, the number of events that person has attended in all, including events that are not in the response. The site marks someone "First time" when it is exactly 1.
 
@@ -66,6 +69,24 @@ An event is one calendar date. The event that is open is today's date, and a req
 An event id is the door code. The site puts it in the door QR as `/checkin?event=<id>` and sends it back as `event`. A request with an id is accepted only on that event's date. On any other date, and for an id this API did not issue, the attendee gets a `400` with a message and no visit is recorded. So a door code left over from an earlier event cannot add anyone to that event's list.
 
 The door code is optional. With `NEXT_PUBLIC_CHECKIN_EVENT_TOKEN` unset on the site, the door QR is plain `/checkin` and everyone checks into the open event.
+
+### Event details
+
+An event can have a name, a venue, and a start time, which the site shows on that date's list so a visit date is recognizably tonight's meetup. They are set on the instance, per date, and can be set before or after the event. A date with none of them shows only its date.
+
+```sh
+npm run admin -- event --name "Friday Meetup" --venue "The Malt House" --time 18:30
+npm run admin -- event 2026-12-04 --time 19:00   # another date; only the parts you pass change
+npm run admin -- event --venue ""                # an empty value clears that part
+```
+
+`--time` is 24-hour `HH:MM`. The name and venue are at most 100 characters. The command prints the date's door code on stdout, as it does without flags, and the stored details on stderr. Setting details on a date also issues its door code, which stays the same afterwards.
+
+A database from before this feature gains the three columns on `events` the next time the API or the admin command opens it. Existing dates have no details.
+
+### Live list
+
+While the listing is open, the site asks `/api/attendance/live` for tonight's list every 15 seconds, so late arrivals and the headcount appear without a reload. It never records a visit. Unlike `lookup`, it also does nothing for someone who is not already on the open date's list, so a phone left open past midnight New York time does not check anyone in to the next day.
 
 ### Before each event with a door code
 
@@ -89,8 +110,9 @@ The id lives in the instance's database, so one printed on another machine will 
 
 ```sh
 npm run admin                                    # list the commands
-npm run admin -- events                          # dates, attendance, first-timers, door codes
+npm run admin -- events                          # dates, details, attendance, first-timers, door codes
 npm run admin -- event 2026-12-04                # same as npm run event -- 2026-12-04
+npm run admin -- event 2026-12-04 --name "Friday Meetup" --venue "The Malt House" --time 18:30
 npm run admin -- attendees                       # who is checked in today, with emails
 npm run admin -- attendees 2026-11-20            # or on another date
 npm run admin -- checkin ada@example.com         # check someone in by hand
@@ -116,7 +138,7 @@ npm run admin -- backup                          # data/attendance-backup-<time>
 
 - `users` stores the required name, unique email, and LinkedIn URL, plus optional website, profession, intro, and topics. A database created before intros and topics existed gains the two columns the next time the API or the admin command opens it.
 - `attendance` stores a date and a user ID. A unique constraint prevents duplicate check-ins by the same attendee on one date, so checking in again for the same event returns the same visit.
-- `events` stores the id issued for each date.
+- `events` stores the id issued for each date, and the name, venue, and start time (`name`, `venue`, `starts_at`) the admin has set for it.
 - `tokens` stores each attendee's check-in token and profile token. They are created the first time the attendee is returned and stay the same after that. To rotate one, use `npm run admin -- rotate`; the old value stops working at once.
 - Existing attendees are checked in and receive the attendee list grouped by dates on which they have checked in.
 - New registrations insert the user and their first attendance row in one transaction.

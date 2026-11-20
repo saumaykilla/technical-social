@@ -21,6 +21,12 @@ export type Profile = {
 /** A person on a date's list. `visitCount` is how many events they have attended in all. */
 export type Attendee = Omit<Profile, "email"> & { visitCount: number };
 
+/** What an admin has said about an event. Each part is null until it is set. `time` is 24-hour HH:MM. */
+export type EventDetails = { name: string | null; venue: string | null; time: string | null };
+
+/** One date's list. `event` is null when the admin has set none of its details. */
+export type Visit = { date: string; event: EventDetails | null; attendees: Attendee[] };
+
 /**
  * The fields a registration or an edit sets. A registration without `intro`
  * or `tags` stores none. An edit without one keeps what is stored.
@@ -51,6 +57,13 @@ const laterUserColumns = {
   tags: "text not null default '[]'",
 };
 
+// The same for `events`, which gained its details after the first deploy.
+const laterEventColumns = {
+  name: "text",
+  venue: "text",
+  starts_at: "text",
+};
+
 // An event is an opaque id for one calendar date, so (user_id, date) on
 // attendance is also the one-visit-per-person-per-event constraint.
 const schema = `
@@ -79,7 +92,10 @@ const schema = `
   create table if not exists events (
     id text primary key,
     date text not null unique check (length(date) = 10),
-    created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    name ${laterEventColumns.name},
+    venue ${laterEventColumns.venue},
+    starts_at ${laterEventColumns.starts_at}
   );
 
   create table if not exists tokens (
@@ -102,22 +118,26 @@ export function openDatabase(filename: string): AttendanceDatabase {
   db.exec("PRAGMA busy_timeout = 5000");
   if (filename !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   db.exec(schema);
-  addUserColumns(db);
+  addColumns(db, "users", laterUserColumns);
+  addColumns(db, "events", laterEventColumns);
   return db;
 }
 
-/** Brings a `users` table created by an earlier version up to the schema. Existing rows get no intro and no topics. */
-function addUserColumns(db: AttendanceDatabase): void {
+/**
+ * Brings a table created by an earlier version up to the schema.
+ * Existing rows get the new columns' defaults: no intro, no topics, no event details.
+ */
+function addColumns(db: AttendanceDatabase, table: "users" | "events", columns: Record<string, string>): void {
   const missing = () => {
-    const present = db.prepare("select name from pragma_table_info('users')").all() as { name: string }[];
-    return Object.entries(laterUserColumns).filter(([name]) => !present.some((column) => column.name === name));
+    const present = db.prepare("select name from pragma_table_info(?)").all(table) as { name: string }[];
+    return Object.entries(columns).filter(([name]) => !present.some((column) => column.name === name));
   };
   if (missing().length === 0) return;
 
   // The API and the admin command can open the file at the same moment, so look again once the write lock is held.
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const [name, definition] of missing()) db.exec(`alter table users add column ${name} ${definition}`);
+    for (const [name, definition] of missing()) db.exec(`alter table ${table} add column ${name} ${definition}`);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -181,6 +201,29 @@ export function issueEvent(db: AttendanceDatabase, date: string): string {
   `).run(`evt_${randomBytes(12).toString("base64url")}`, date);
   const row = db.prepare("select id from events where date = ?").get(date) as { id: string };
   return row.id;
+}
+
+/**
+ * Saves the parts of an event's details that `changes` names and leaves the others as they are.
+ * The date's event row is issued first when it has none. Returns the details as stored.
+ */
+export function setEventDetails(db: AttendanceDatabase, date: string, changes: Partial<EventDetails>): EventDetails {
+  issueEvent(db, date);
+  const has = (value: string | null | undefined) => (value === undefined ? 0 : 1);
+  db.prepare(`
+    update events
+    set name = case when ? then ? else name end,
+        venue = case when ? then ? else venue end,
+        starts_at = case when ? then ? else starts_at end
+    where date = ?
+  `).run(
+    has(changes.name), changes.name ?? null,
+    has(changes.venue), changes.venue ?? null,
+    has(changes.time), changes.time ?? null,
+    date,
+  );
+  const row = db.prepare("select name, venue, starts_at as time from events where date = ?").get(date) as EventDetails;
+  return { name: row.name, venue: row.venue, time: row.time };
 }
 
 /** Records the visit. Returns false when the person was already checked in on that date. */
@@ -260,27 +303,63 @@ export function updateProfile(db: AttendanceDatabase, changes: Registration): Pr
   return findUserByEmail(db, changes.email);
 }
 
-export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
-  const rows = db.prepare(`
-    select a.date as date, ${profileColumns},
-           (select count(*) from attendance visits where visits.user_id = u.id) as visitCount
-    from attendance a
-    join users u on u.id = a.user_id
-    where a.date in (select date from attendance where user_id = ?)
-    order by a.date desc, a.rowid asc
-  `).all(profile.id) as Array<ProfileRow & { date: string; visitCount: number }>;
+type VisitRow = ProfileRow & {
+  date: string;
+  visitCount: number;
+  eventName: string | null;
+  eventVenue: string | null;
+  eventTime: string | null;
+};
 
-  const visits: { date: string; attendees: Attendee[] }[] = [];
+/** One row per person per date, with the date's event details. Add a where clause and an order. */
+const visitRows = `
+  select a.date as date, ${profileColumns},
+         (select count(*) from attendance visits where visits.user_id = u.id) as visitCount,
+         e.name as eventName, e.venue as eventVenue, e.starts_at as eventTime
+  from attendance a
+  join users u on u.id = a.user_id
+  left join events e on e.date = a.date
+`;
+
+/** Groups rows that are already ordered by date into one visit per date. */
+function visitsFromRows(rows: VisitRow[]): Visit[] {
+  const visits: Visit[] = [];
   for (const row of rows) {
     const current = visits.at(-1);
     // Everyone on the list sees these rows, so the email stays out of them.
     const { email: _email, ...shown } = profileFromRow(row);
     const attendee = { ...shown, visitCount: row.visitCount };
-    if (current?.date === row.date) current.attendees.push(attendee);
-    else visits.push({ date: row.date, attendees: [attendee] });
+    if (current?.date === row.date) {
+      current.attendees.push(attendee);
+      continue;
+    }
+    const event = { name: row.eventName, venue: row.eventVenue, time: row.eventTime };
+    const described = event.name !== null || event.venue !== null || event.time !== null;
+    visits.push({ date: row.date, event: described ? event : null, attendees: [attendee] });
   }
+  return visits;
+}
 
-  return { profile, visits, tokens: userTokens(db, profile.id) };
+export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
+  const rows = db.prepare(`
+    ${visitRows}
+    where a.date in (select date from attendance where user_id = ?)
+    order by a.date desc, a.rowid asc
+  `).all(profile.id) as VisitRow[];
+
+  return { profile, visits: visitsFromRows(rows), tokens: userTokens(db, profile.id) };
+}
+
+/** The list for one date, or null when the profile is not on it. Records nothing. */
+export function visitOn(db: AttendanceDatabase, profile: Profile, date: string): Visit | null {
+  const rows = db.prepare(`
+    ${visitRows}
+    where a.date = ?
+    order by a.rowid asc
+  `).all(date) as VisitRow[];
+
+  if (!rows.some((row) => row.id === profile.id)) return null;
+  return visitsFromRows(rows)[0];
 }
 
 /**
@@ -330,6 +409,10 @@ export type EventDay = {
   attendees: number;
   /** Attendees whose first event this was. */
   firstTimers: number;
+  name: string | null;
+  venue: string | null;
+  /** 24-hour HH:MM. */
+  time: string | null;
 };
 
 /** Every profile, by name. */
@@ -364,7 +447,7 @@ export function listCheckIns(db: AttendanceDatabase, date: string): CheckIn[] {
 /** Every date that has a door code or a check-in, newest first. */
 export function listEventDays(db: AttendanceDatabase): EventDay[] {
   return db.prepare(`
-    select d.date as date, e.id as id,
+    select d.date as date, e.id as id, e.name as name, e.venue as venue, e.starts_at as time,
            (select count(*) from attendance a where a.date = d.date) as attendees,
            (select count(*) from attendance a
             where a.date = d.date and not exists (

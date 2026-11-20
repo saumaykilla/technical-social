@@ -9,7 +9,9 @@ import {
   recordAttendance,
   registerAndAttend,
   updateProfile,
+  visitOn,
   type AttendanceDatabase,
+  type Profile,
 } from "./db.ts";
 import { normalizedEmail, profileFields, requiredText } from "./validation.ts";
 
@@ -31,6 +33,11 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
   /** The date of the event that is open right now. */
   function today() {
     return calendarDate(now(), timeZone);
+  }
+
+  /** The attendee's lists, plus the open date so the site can tell tonight's list from the others. */
+  function summary(profile: Profile) {
+    return { ...attendanceSummary(db, profile), openDate: today() };
   }
 
   /**
@@ -64,7 +71,19 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
     }
 
     recordAttendance(db, profile.id, visit.date);
-    return response.json(attendanceSummary(db, profile));
+    return response.json(summary(profile));
+  });
+
+  // Tonight's list for someone already on it, for the site to poll. Unlike lookup, it records no visit.
+  // The email only has to match a profile, as it does for lookup, and the list is the open date's alone.
+  app.post("/api/attendance/live", (request, response) => {
+    const email = normalizedEmail(request.body?.email);
+    if (!email) return response.status(400).json({ error: "Enter a valid email address." });
+
+    const profile = findUserByEmail(db, email);
+    if (!profile) return response.status(404).json({ error: "Create a profile to check in." });
+
+    return response.json({ visit: visitOn(db, profile, today()) });
   });
 
   app.post("/api/attendance/register", (request, response) => {
@@ -75,7 +94,7 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
     if ("error" in visit) return response.status(400).json({ error: visit.error });
 
     const profile = registerAndAttend(db, registration, visit.date);
-    return response.json(attendanceSummary(db, profile));
+    return response.json(summary(profile));
   });
 
   // Edits a profile. The email picks the profile and is never changed, and no visit is recorded.
@@ -87,7 +106,7 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
     const profile = updateProfile(db, changes);
     if (!profile) return response.status(404).json({ error: "Check in again to update your profile." });
 
-    return response.json(attendanceSummary(db, profile));
+    return response.json(summary(profile));
   });
 
   app.post("/api/attendance/redeem", (request, response) => {
@@ -98,7 +117,7 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
     if (!profile) return response.status(401).json({ error: "This check-in code is invalid or expired." });
 
     recordAttendance(db, profile.id, today());
-    return response.json(attendanceSummary(db, profile));
+    return response.json(summary(profile));
   });
 
   app.post("/api/attendance/profile", (request, response) => {

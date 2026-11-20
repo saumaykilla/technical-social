@@ -16,6 +16,7 @@ import {
   recordAttendance,
   removeAttendance,
   rotateTokens,
+  setEventDetails,
   updateProfile,
   userTokens,
   visitDates,
@@ -23,7 +24,7 @@ import {
   type Person,
   type TokenKind,
 } from "./db.ts";
-import { normalizedEmail, profileFields } from "./validation.ts";
+import { eventDetailFields, normalizedEmail, profileFields } from "./validation.ts";
 
 export type AdminIo = {
   /** Opens the database. Called once a command is known to be well-formed. */
@@ -58,6 +59,7 @@ type Command = {
 const yes = { yes: { type: "boolean" } } as const;
 const csvFlag = { csv: { type: "boolean" } } as const;
 const editable = ["name", "email", "linkedin", "website", "profession"] as const;
+const eventFields = ["name", "venue", "time"] as const;
 const rotations: Record<string, { kinds: TokenKind[]; label: string }> = {
   checkin: { kinds: ["checkIn"], label: "check-in code" },
   profile: { kinds: ["profile"], label: "profile code" },
@@ -73,8 +75,11 @@ const commands: Record<string, Command> = {
     run({ db, io }) {
       const days = listEventDays(db);
       if (days.length === 0) return io.out("No events yet.");
-      table(io, ["DATE", "CHECKED IN", "FIRST TIME", "DOOR CODE"], days.map((day) => [
+      table(io, ["DATE", "TIME", "NAME", "VENUE", "CHECKED IN", "FIRST TIME", "DOOR CODE"], days.map((day) => [
         day.date,
+        day.time,
+        day.name,
+        day.venue,
         day.attendees,
         day.firstTimers,
         day.id,
@@ -84,13 +89,26 @@ const commands: Record<string, Command> = {
 
   event: {
     group: "Events",
-    usage: "event [date]",
-    summary: "Print or issue a date's door code",
+    usage: "event [date] [--name <text>] [--venue <text>] [--time <HH:MM>]",
+    summary: "Print or issue a date's door code, and set its details",
     maxArguments: 1,
-    run({ db, io, today }, [date]) {
+    options: Object.fromEntries(eventFields.map((field) => [field, { type: "string" } as const])),
+    run({ db, io, today }, [date], flags) {
       const day = dateOr(today, date);
+      const given = Object.fromEntries(
+        eventFields.filter((field) => typeof flags[field] === "string").map((field) => [field, flags[field] as string]),
+      );
+      const details = eventDetailFields(given);
+      if ("error" in details) throw new AdminError(details.error);
+
+      const saved = Object.keys(details).length > 0 ? setEventDetails(db, day, details) : null;
       io.err(`Event id for ${day}:`);
       io.out(issueEvent(db, day));
+      if (saved) {
+        io.err(`Name: ${printable(saved.name)}`);
+        io.err(`Venue: ${printable(saved.venue)}`);
+        io.err(`Time: ${printable(saved.time)}`);
+      }
     },
   },
 
@@ -363,7 +381,8 @@ function help(): string {
     "A date is YYYY-MM-DD and defaults to today.",
     "search matches part of a name, email, or profession.",
     `edit takes ${editable.map((field) => `--${field}`).join(", ")}.`,
-    'Pass "" to clear the website or profession.',
+    'Pass "" to clear the website or profession, or an event\'s name, venue, or time.',
+    "event takes a 24-hour --time, which the listing shows as 6:30 PM for 18:30.",
     "rotate and delete ask first. Add --yes to skip the question.",
     "backup writes next to the database unless a file is named.",
   );

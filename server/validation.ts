@@ -1,5 +1,5 @@
 // Field rules shared by the API and the admin command.
-import type { Registration } from "./db.ts";
+import type { EventDetails, Registration } from "./db.ts";
 
 /** The topic ids a profile can carry, in the order the site lists them. */
 export const tagIds = ["ml", "llms", "web", "data", "hiring", "job-hunting"] as const;
@@ -45,6 +45,41 @@ export function profileFields(body: unknown): Registration | { error: string } {
   }
 
   return profile;
+}
+
+/** The longest event name or venue. */
+export const eventTextLimit = 100;
+
+/**
+ * The event details in a set of fields, or the message for the first rule they break.
+ * A part the fields leave out is left out of the result, and an empty one clears it.
+ */
+export function eventDetailFields(fields: {
+  name?: string;
+  venue?: string;
+  time?: string;
+}): Partial<EventDetails> | { error: string } {
+  const details: Partial<EventDetails> = {};
+
+  for (const key of ["name", "venue"] as const) {
+    const value = fields[key];
+    if (value === undefined) continue;
+    const text = optionalText(value);
+    if (text && text.length > eventTextLimit) {
+      return { error: `Keep the event ${key} to ${eventTextLimit} characters or fewer.` };
+    }
+    details[key] = text;
+  }
+
+  if (fields.time !== undefined) {
+    const time = fields.time.trim();
+    if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+      return { error: `"${fields.time}" is not a time. Use 24-hour HH:MM, for example 18:30.` };
+    }
+    details.time = time || null;
+  }
+
+  return details;
 }
 
 /** The trimmed, lowercased email, or null when the value is not an email address. */

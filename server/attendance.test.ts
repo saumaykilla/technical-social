@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { createApp } from "./app.ts";
-import { issueEvent, openDatabase } from "./db.ts";
+import { issueEvent, openDatabase, setEventDetails } from "./db.ts";
 
 // The tests assume the default zone, whatever the shell running them has set.
 delete process.env.EVENT_TIME_ZONE;
@@ -38,12 +38,18 @@ function count(db: ReturnType<typeof openDatabase>, table: "users" | "attendance
   return (db.prepare(`select count(*) as total from ${table}`).get() as { total: number }).total;
 }
 
+// What each variable held before any test set it. A test that sets one twice must still end with this value.
+const unsetEnv = new Map<string, string | undefined>();
+
 function setEnv(t: TestContext, name: string, value: string) {
-  const previous = process.env[name];
+  if (!unsetEnv.has(name)) unsetEnv.set(name, process.env[name]);
   process.env[name] = value;
   t.after(() => {
-    if (previous === undefined) delete process.env[name];
-    else process.env[name] = previous;
+    if (!unsetEnv.has(name)) return;
+    const original = unsetEnv.get(name);
+    unsetEnv.delete(name);
+    if (original === undefined) delete process.env[name];
+    else process.env[name] = original;
   });
 }
 
@@ -73,8 +79,10 @@ test("register stores a profile and checks the attendee in for today's date", as
   assert.equal(body.profile.name, "Ada Lovelace");
   assert.equal(body.profile.website, "https://ada.example");
   assert.equal(body.profile.profession, "Engineer");
+  assert.equal(body.openDate, "2026-11-18");
   assert.deepEqual(body.visits, [{
     date: "2026-11-18",
+    event: null,
     attendees: [{
       id: body.profile.id,
       name: "Ada Lovelace",
@@ -360,8 +368,10 @@ test("update changes the profile everywhere it is shown and nothing else", async
     tags: [],
   });
   assert.deepEqual(body.tokens, registered.body.tokens);
+  assert.equal(body.openDate, "2026-12-02");
   assert.deepEqual(body.visits, [{
     date: "2026-11-18",
+    event: null,
     attendees: [
       {
         id: registered.body.profile.id,
@@ -773,4 +783,136 @@ test("a body that is not JSON is answered in JSON", async (t) => {
 
   assert.equal(status, 400);
   assert.equal(typeof body.error, "string");
+});
+
+test("each visit carries its date's event details, and a date with none has event null", async (t) => {
+  let current = new Date("2026-11-13T23:00:00.000Z");
+  const { db, url } = await start(t, () => current);
+  await post(url, "/api/attendance/register", registration);
+
+  current = new Date("2026-11-20T23:00:00.000Z");
+  setEventDetails(db, "2026-11-20", { name: "Friday Meetup", venue: "The Malt House", time: "18:30" });
+  const { body } = await post(url, "/api/attendance/lookup", { email: registration.email });
+
+  assert.equal(body.openDate, "2026-11-20");
+  assert.deepEqual(
+    body.visits.map((visit: { date: string; event: unknown }) => [visit.date, visit.event]),
+    [
+      ["2026-11-20", { name: "Friday Meetup", venue: "The Malt House", time: "18:30" }],
+      ["2026-11-13", null],
+    ],
+  );
+  assert.equal(JSON.stringify(body).includes("evt_"), false);
+
+  // A date with only some details shows those, and the rest are null.
+  setEventDetails(db, "2026-11-13", { venue: "The Irish American Pub" });
+  const partial = await post(url, "/api/attendance/lookup", { email: registration.email });
+  assert.deepEqual(partial.body.visits[1].event, { name: null, venue: "The Irish American Pub", time: null });
+
+  // Clearing every part takes the event back to null.
+  setEventDetails(db, "2026-11-13", { venue: null });
+  const cleared = await post(url, "/api/attendance/lookup", { email: registration.email });
+  assert.equal(cleared.body.visits[1].event, null);
+});
+
+test("live returns the open date's list with its event, and records no visit", async (t) => {
+  const { db, url } = await start(t);
+  setEventDetails(db, "2026-11-18", { name: "Friday Meetup", time: "18:30" });
+  const ada = await post(url, "/api/attendance/register", registration);
+
+  const first = await post(url, "/api/attendance/live", { email: " ADA@example.com " });
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.visit.event, { name: "Friday Meetup", venue: null, time: "18:30" });
+  assert.deepEqual(first.body.visit.attendees.map((person: { name: string }) => person.name), ["Ada Lovelace"]);
+  assert.equal("tokens" in first.body, false);
+  assert.equal("email" in first.body.visit.attendees[0], false);
+
+  // A late arrival shows up on the next read, in the order they arrived.
+  await post(url, "/api/attendance/register", grace);
+  const second = await post(url, "/api/attendance/live", { email: registration.email });
+  assert.deepEqual(
+    second.body.visit.attendees.map((person: { name: string }) => person.name),
+    ["Ada Lovelace", "Grace Hopper"],
+  );
+  assert.equal(second.body.visit.attendees[0].id, ada.body.profile.id);
+  assert.equal(count(db, "attendance"), 2);
+});
+
+test("live gives someone who is not on the open date's list nothing, and polling never checks them in", async (t) => {
+  let current = new Date("2026-11-18T15:00:00.000Z");
+  const { db, url } = await start(t, () => current);
+  await post(url, "/api/attendance/register", registration);
+  await post(url, "/api/attendance/register", grace);
+
+  // A week later Ada has not come, so she cannot read tonight's list.
+  current = new Date("2026-11-25T15:00:00.000Z");
+  const absent = await post(url, "/api/attendance/live", { email: registration.email });
+  assert.equal(absent.status, 200);
+  assert.deepEqual(absent.body, { visit: null });
+  assert.equal(count(db, "attendance"), 2);
+
+  // Once she checks in, she can.
+  await post(url, "/api/attendance/lookup", { email: registration.email });
+  const present = await post(url, "/api/attendance/live", { email: registration.email });
+  assert.deepEqual(present.body.visit.attendees.map((person: { name: string }) => person.name), ["Ada Lovelace"]);
+  assert.equal(present.body.visit.date, "2026-11-25");
+});
+
+test("live rejects an invalid email and an unknown one without creating anything", async (t) => {
+  const { db, url } = await start(t);
+
+  const invalid = await post(url, "/api/attendance/live", { email: "not an email" });
+  assert.equal(invalid.status, 400);
+  const missing = await post(url, "/api/attendance/live", {});
+  assert.equal(missing.status, 400);
+  const unknown = await post(url, "/api/attendance/live", { email: "nobody@example.com" });
+  assert.equal(unknown.status, 404);
+  assert.equal(typeof unknown.body.error, "string");
+  assert.equal(count(db, "users"), 0);
+  assert.equal(count(db, "attendance"), 0);
+});
+
+test("openDate follows EVENT_TIME_ZONE like the visit date does", async (t) => {
+  const eightPm = () => new Date("2026-11-21T01:00:00.000Z");
+
+  const newYork = await start(t, eightPm);
+  const inNewYork = await post(newYork.url, "/api/attendance/register", registration);
+  assert.equal(inNewYork.body.openDate, "2026-11-20");
+
+  setEnv(t, "EVENT_TIME_ZONE", "UTC");
+  const utc = await start(t, eightPm);
+  const inUtc = await post(utc.url, "/api/attendance/register", registration);
+  assert.equal(inUtc.body.openDate, "2026-11-21");
+});
+
+test("a database created before event details existed gains them when it is opened", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "attendance-api-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "attendance.sqlite");
+  const before = new DatabaseSync(file);
+  before.exec(`
+    create table events (
+      id text primary key,
+      date text not null unique check (length(date) = 10),
+      created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+    insert into events (id, date) values ('evt_legacy', '2026-11-18');
+  `);
+  before.close();
+
+  for (const reopened of [false, true]) {
+    const db = openDatabase(file);
+    t.after(() => db.close());
+    if (!reopened) {
+      assert.equal(issueEvent(db, "2026-11-18"), "evt_legacy");
+      assert.deepEqual(setEventDetails(db, "2026-11-18", { name: "Friday Meetup" }), {
+        name: "Friday Meetup",
+        venue: null,
+        time: null,
+      });
+    } else {
+      const row = db.prepare("select id, name from events where date = '2026-11-18'").get() as { id: string; name: string };
+      assert.deepEqual({ ...row }, { id: "evt_legacy", name: "Friday Meetup" });
+    }
+  }
 });

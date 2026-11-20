@@ -132,11 +132,50 @@ test("events lists each date with its attendance, first-timers, and door code", 
 
   assert.equal(code, 0);
   assert.deepEqual(rows(out), [
-    ["DATE", "CHECKED IN", "FIRST TIME", "DOOR CODE"],
-    ["2026-12-04", "0", "0", issued.out],
-    ["2026-11-20", "2", "1", "-"],
-    ["2026-11-06", "1", "1", "-"],
+    ["DATE", "TIME", "NAME", "VENUE", "CHECKED IN", "FIRST TIME", "DOOR CODE"],
+    ["2026-12-04", "-", "-", "-", "0", "0", issued.out],
+    ["2026-11-20", "-", "-", "-", "2", "1", "-"],
+    ["2026-11-06", "-", "-", "-", "1", "1", "-"],
   ]);
+});
+
+test("event saves a name, venue, and time for its date and lists them", async () => {
+  const { db, admin } = seeded();
+
+  const saved = await admin("event", "--name", "Friday Meetup", "--venue", "The Malt House", "--time", "18:30");
+
+  assert.equal(saved.code, 0);
+  assert.match(saved.out, /^evt_[A-Za-z0-9_-]{16}$/);
+  assert.equal(
+    saved.err,
+    "Event id for 2026-11-20:\nName: Friday Meetup\nVenue: The Malt House\nTime: 18:30",
+  );
+  const listed = rows((await admin("events")).out);
+  assert.deepEqual(listed[1], ["2026-11-20", "18:30", "Friday Meetup", "The Malt House", "2", "1", saved.out]);
+  assert.deepEqual(listed[2].slice(1, 4), ["-", "-", "-"]);
+
+  // Only the parts that are given change, and an empty one clears it. The door code stays.
+  const venue = await admin("event", "2026-11-20", "--venue", "The Irish American Pub", "--time", "");
+  assert.equal(venue.out, saved.out);
+  assert.equal(venue.err, "Event id for 2026-11-20:\nName: Friday Meetup\nVenue: The Irish American Pub\nTime: -");
+  assert.deepEqual(
+    { ...(db.prepare("select name, venue, starts_at from events where date = '2026-11-20'").get() as object) },
+    { name: "Friday Meetup", venue: "The Irish American Pub", starts_at: null },
+  );
+});
+
+test("event refuses a time that is not 24-hour HH:MM, or text that is too long, and saves nothing", async () => {
+  const { db, admin } = seeded();
+
+  for (const time of ["6:30 PM", "24:00", "18:60", "1830"]) {
+    const { code, err } = await admin("event", "--name", "Nope", "--time", time);
+    assert.equal(code, 1, time);
+    assert.match(err, /is not a time\. Use 24-hour HH:MM/);
+  }
+  const long = await admin("event", "--venue", "x".repeat(101));
+  assert.equal(long.code, 1);
+  assert.match(long.err, /venue to 100 characters or fewer/);
+  assert.equal((db.prepare("select count(*) as total from events").get() as { total: number }).total, 0);
 });
 
 test("event prints the door code for today in New York or for a given date, and keeps it", async () => {
