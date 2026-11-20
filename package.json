@@ -11,8 +11,9 @@
     "dev:api": "node --watch server/index.ts",
     "start": "node server/index.ts",
     "start:api": "node server/index.ts",
-    "event": "node server/event.ts",
-    "test": "node --test server/attendance.test.ts"
+    "admin": "node --disable-warning=ExperimentalWarning server/admin.ts",
+    "event": "node --disable-warning=ExperimentalWarning server/admin.ts event",
+    "test": "node --test \"server/*.test.ts\""
   },
   "dependencies": {
     "cors": "^2.8.6",

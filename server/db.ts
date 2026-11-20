@@ -76,6 +76,8 @@ export function openDatabase(filename: string): AttendanceDatabase {
 
   const db = new DatabaseSync(filename);
   db.exec("PRAGMA foreign_keys = ON");
+  // The API and the admin command write to the same file. Wait for the other one instead of failing.
+  db.exec("PRAGMA busy_timeout = 5000");
   if (filename !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   db.exec(schema);
   return db;
@@ -132,12 +134,14 @@ export function issueEvent(db: AttendanceDatabase, date: string): string {
   return row.id;
 }
 
-export function recordAttendance(db: AttendanceDatabase, userId: string, date: string): void {
-  db.prepare(`
+/** Records the visit. Returns false when the person was already checked in on that date. */
+export function recordAttendance(db: AttendanceDatabase, userId: string, date: string): boolean {
+  const { changes } = db.prepare(`
     insert into attendance (id, date, user_id)
     values (?, ?, ?)
     on conflict (user_id, date) do nothing
   `).run(crypto.randomUUID(), date, userId);
+  return Number(changes) > 0;
 }
 
 /** Checks the email's profile in for `date`, creating the profile first when the email is new. */
@@ -214,7 +218,7 @@ export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
  * A person's two tokens. They are minted the first time they are needed, which
  * also covers profiles created before tokens existed, and never change after.
  */
-function userTokens(db: AttendanceDatabase, userId: string): Tokens {
+export function userTokens(db: AttendanceDatabase, userId: string): Tokens {
   const stored = db.prepare("select kind, token from tokens where user_id = ?")
     .all(userId) as { kind: TokenKind; token: string }[];
   const tokens: Partial<Tokens> = Object.fromEntries(stored.map(({ kind, token }) => [kind, token]));
@@ -231,4 +235,109 @@ function userTokens(db: AttendanceDatabase, userId: string): Tokens {
 
 function tokenDigest(token: string): Buffer {
   return createHash("sha256").update(token).digest();
+}
+
+// Everything below is used only by the admin command.
+
+export type Person = Profile & {
+  createdAt: string;
+  visitCount: number;
+  lastVisit: string | null;
+};
+
+export type CheckIn = Profile & {
+  visitCount: number;
+  /** 1 when the person had attended no earlier event, otherwise 0. */
+  firstTime: number;
+  checkedInAt: string;
+};
+
+export type EventDay = {
+  date: string;
+  /** The door code issued for the date, if one was. */
+  id: string | null;
+  attendees: number;
+  /** Attendees whose first event this was. */
+  firstTimers: number;
+};
+
+/** Every profile, by name. */
+export function listPeople(db: AttendanceDatabase): Person[] {
+  return db.prepare(`
+    select u.id as id, u.name as name, u.email as email, u.linkedin as linkedin,
+           u.website as website, u.profession as profession, u.created_at as createdAt,
+           (select count(*) from attendance a where a.user_id = u.id) as visitCount,
+           (select max(a.date) from attendance a where a.user_id = u.id) as lastVisit
+    from users u
+    order by lower(u.name), u.email
+  `).all() as Person[];
+}
+
+/** The people checked in on a date, in the order they arrived. */
+export function listCheckIns(db: AttendanceDatabase, date: string): CheckIn[] {
+  return db.prepare(`
+    select u.id as id, u.name as name, u.email as email, u.linkedin as linkedin,
+           u.website as website, u.profession as profession, a.created_at as checkedInAt,
+           (select count(*) from attendance visits where visits.user_id = u.id) as visitCount,
+           not exists (
+             select 1 from attendance earlier
+             where earlier.user_id = a.user_id and earlier.date < a.date
+           ) as firstTime
+    from attendance a
+    join users u on u.id = a.user_id
+    where a.date = ?
+    order by a.rowid
+  `).all(date) as CheckIn[];
+}
+
+/** Every date that has a door code or a check-in, newest first. */
+export function listEventDays(db: AttendanceDatabase): EventDay[] {
+  return db.prepare(`
+    select d.date as date, e.id as id,
+           (select count(*) from attendance a where a.date = d.date) as attendees,
+           (select count(*) from attendance a
+            where a.date = d.date and not exists (
+              select 1 from attendance earlier
+              where earlier.user_id = a.user_id and earlier.date < a.date
+            )) as firstTimers
+    from (select date from events union select date from attendance) d
+    left join events e on e.date = d.date
+    order by d.date desc
+  `).all() as EventDay[];
+}
+
+/** The dates a person attended, newest first. */
+export function visitDates(db: AttendanceDatabase, userId: string): string[] {
+  const rows = db.prepare("select date from attendance where user_id = ? order by date desc")
+    .all(userId) as { date: string }[];
+  return rows.map((row) => row.date);
+}
+
+/** Removes a visit. Returns false when the person had none on that date. */
+export function removeAttendance(db: AttendanceDatabase, userId: string, date: string): boolean {
+  const { changes } = db.prepare("delete from attendance where user_id = ? and date = ?").run(userId, date);
+  return Number(changes) > 0;
+}
+
+/** Changes the email a profile is found by. The caller checks that no other profile has it. */
+export function changeEmail(db: AttendanceDatabase, userId: string, email: string): void {
+  db.prepare("update users set email = ? where id = ?").run(email, userId);
+}
+
+/** Replaces the person's tokens of these kinds. The old values stop working at once. */
+export function rotateTokens(db: AttendanceDatabase, userId: string, kinds: readonly TokenKind[]): Tokens {
+  for (const kind of kinds) {
+    db.prepare("delete from tokens where user_id = ? and kind = ?").run(userId, kind);
+  }
+  return userTokens(db, userId);
+}
+
+/** Deletes a profile along with its visits and tokens. */
+export function deleteUser(db: AttendanceDatabase, userId: string): void {
+  db.prepare("delete from users where id = ?").run(userId);
+}
+
+/** Writes a consistent copy of the database to a new file. Safe while the API is running. */
+export function backupDatabase(db: AttendanceDatabase, file: string): void {
+  db.prepare("vacuum into ?").run(file);
 }

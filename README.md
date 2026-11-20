@@ -74,12 +74,41 @@ The door code is optional. With `NEXT_PUBLIC_CHECKIN_EVENT_TOKEN` unset on the s
 
 The id lives in the instance's database, so one printed on another machine will not work. A door code stops working at midnight New York time on its date. Personal check-in codes and plain `/checkin` are not tied to an id and keep working.
 
+## Admin
+
+`npm run admin` manages the database from an SSH session on the instance. Run it from the repo root there, as the user the API runs as. It reads and writes the SQLite file directly while the API keeps running, so anyone who can run it already has full access to the data. Nothing here is reachable over HTTP.
+
+```sh
+npm run admin                                    # list the commands
+npm run admin -- events                          # dates, attendance, first-timers, door codes
+npm run admin -- event 2026-12-04                # same as npm run event -- 2026-12-04
+npm run admin -- attendees                       # who is checked in today, with emails
+npm run admin -- attendees 2026-11-20            # or on another date
+npm run admin -- checkin ada@example.com         # check someone in by hand
+npm run admin -- uncheck ada@example.com 2026-11-20
+npm run admin -- people ada                      # search name, email, or profession
+npm run admin -- show ada@example.com            # profile, visit dates, tokens
+npm run admin -- edit ada@example.com --name "Ada King" --email king@example.com --website ""
+npm run admin -- rotate ada@example.com checkin  # or profile, or both
+npm run admin -- delete ada@example.com
+npm run admin -- backup                          # data/attendance-backup-<time>.sqlite
+```
+
+- `rotate` and `delete` cannot be undone, so they ask before acting. Add `--yes` to skip the question, which a script with no terminal has to do.
+- `edit` applies the same rules as the API and is the only way to change an email. Visits and QR codes stay with the profile.
+- `backup` is safe while the API is running. Copying the `.sqlite` file by hand is not, because recent writes may still be in the `-wal` file beside it.
+- For a spreadsheet, add `--csv` to `attendees` or `people` and use `npm run -s` so npm prints nothing of its own:
+
+  ```sh
+  npm run -s admin -- attendees 2026-11-20 --csv > attendees.csv
+  ```
+
 ## Data and behavior
 
 - `users` stores the required name, unique email, and LinkedIn URL, plus optional website and profession.
 - `attendance` stores a date and a user ID. A unique constraint prevents duplicate check-ins by the same attendee on one date, so checking in again for the same event returns the same visit.
 - `events` stores the id issued for each date.
-- `tokens` stores each attendee's check-in token and profile token. They are created the first time the attendee is returned and stay the same after that. To rotate one, delete its row; the next lookup issues a new token and the old one stops working.
+- `tokens` stores each attendee's check-in token and profile token. They are created the first time the attendee is returned and stay the same after that. To rotate one, use `npm run admin -- rotate`; the old value stops working at once.
 - Existing attendees are checked in and receive the attendee list grouped by dates on which they have checked in.
 - New registrations insert the user and their first attendance row in one transaction.
 - Other attendees' email addresses are not included in the attendee list response.

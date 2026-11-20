@@ -10,11 +10,9 @@ import {
   registerAndAttend,
   updateProfile,
   type AttendanceDatabase,
-  type Registration,
 } from "./db.ts";
+import { invalidProfile, normalizedEmail, profileFields, requiredText } from "./validation.ts";
 
-const invalidProfile =
-  "Name, a valid email, and LinkedIn URL are required. Website must also be a valid URL when provided.";
 const unknownEvent = "This event code is not recognized.";
 const closedEvent = "This check-in link is for a different event. Scan tonight's door code to check in.";
 
@@ -133,40 +131,4 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
   app.use(jsonErrors);
 
   return app;
-}
-
-/** The profile in a register or update body, or null when a required field is missing or a URL is malformed. */
-function profileFields(body: unknown): Registration | null {
-  const fields = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
-  const email = normalizedEmail(fields.email);
-  const name = requiredText(fields.name);
-  const linkedin = requiredText(fields.linkedin);
-  const website = optionalText(fields.website);
-
-  if (!email || !name || !linkedin || !isHttpUrl(linkedin) || (website && !isHttpUrl(website))) return null;
-  return { email, name, linkedin, website, profession: optionalText(fields.profession) };
-}
-
-function normalizedEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const email = value.trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
-}
-
-function optionalText(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  return value.trim() || null;
-}
-
-function requiredText(value: unknown): string | null {
-  return optionalText(value);
-}
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
 }
