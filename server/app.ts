@@ -1,14 +1,18 @@
 import cors from "cors";
 import express from "express";
+import { calendarDate, eventTimeZone } from "./dates.ts";
 import {
   attendanceSummary,
-  DuplicateEmailError,
+  findEventDate,
   findUserByEmail,
-  findUserById,
+  findUserByToken,
   recordAttendance,
   registerAndAttend,
   type AttendanceDatabase,
 } from "./db.ts";
+
+const unknownEvent = "This event code is not recognized.";
+const closedEvent = "This check-in link is for a different event. Scan tonight's door code to check in.";
 
 export function createApp(db: AttendanceDatabase, now: () => Date = () => new Date()) {
   const app = express();
@@ -16,12 +20,31 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
     .split(",")
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+  const timeZone = eventTimeZone();
+  calendarDate(now(), timeZone); // Fail at startup, not at the door, on a misspelled zone.
 
   app.use(cors({ origin: allowedOrigins }));
   app.use(express.json({ limit: "16kb" }));
 
-  function utcDate() {
-    return now().toISOString().slice(0, 10);
+  /** The date of the event that is open right now. */
+  function today() {
+    return calendarDate(now(), timeZone);
+  }
+
+  /**
+   * The date to record a visit on, or why `event` cannot be checked into.
+   * Only the open event takes check-ins, so a door code left over from an
+   * earlier event is refused instead of adding a visit to that event's date.
+   */
+  function openEvent(event: unknown): { date: string } | { error: string } {
+    const date = today();
+    if (event === undefined || event === null) return { date };
+    if (typeof event !== "string") return { error: unknownEvent };
+    const id = event.trim();
+    if (!id) return { date };
+    const eventDate = findEventDate(db, id);
+    if (!eventDate) return { error: unknownEvent };
+    return eventDate === date ? { date } : { error: closedEvent };
   }
 
   app.get("/health", (_request, response) => response.json({ status: "ok" }));
@@ -30,17 +53,16 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
     const email = normalizedEmail(request.body?.email);
     if (!email) return response.status(400).json({ error: "Enter a valid email address." });
 
+    const visit = openEvent(request.body?.event);
+    if ("error" in visit) return response.status(400).json({ error: visit.error });
+
     const profile = findUserByEmail(db, email);
     if (!profile) {
-      return response.status(404).json({ registrationRequired: true, error: "That email is not registered." });
+      return response.status(404).json({ error: "Create a profile to check in.", registrationRequired: true });
     }
 
-    try {
-      recordAttendance(db, profile.id, utcDate());
-      return response.json(attendanceSummary(db, profile));
-    } catch {
-      return response.status(500).json({ error: "Could not record your attendance." });
-    }
+    recordAttendance(db, profile.id, visit.date);
+    return response.json(attendanceSummary(db, profile));
   });
 
   app.post("/api/attendance/register", (request, response) => {
@@ -55,26 +77,59 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
       });
     }
 
-    try {
-      const userId = registerAndAttend(db, {
-        name,
-        email,
-        linkedin,
-        website,
-        profession: optionalText(request.body?.profession),
-      }, utcDate());
-      const profile = findUserById(db, userId);
-      if (!profile) {
-        return response.status(500).json({ error: "Registration succeeded, but your attendee list could not be loaded." });
-      }
-      return response.status(201).json(attendanceSummary(db, profile));
-    } catch (error) {
-      if (error instanceof DuplicateEmailError) {
-        return response.status(409).json({ error: "That email is already registered. Return and enter it to check in." });
-      }
-      return response.status(500).json({ error: "Could not complete registration." });
-    }
+    const visit = openEvent(request.body?.event);
+    if ("error" in visit) return response.status(400).json({ error: visit.error });
+
+    const profile = registerAndAttend(db, {
+      name,
+      email,
+      linkedin,
+      website,
+      profession: optionalText(request.body?.profession),
+    }, visit.date);
+    return response.json(attendanceSummary(db, profile));
   });
+
+  app.post("/api/attendance/redeem", (request, response) => {
+    const token = requiredText(request.body?.token);
+    if (!token) return response.status(400).json({ error: "A check-in code is required." });
+
+    const profile = findUserByToken(db, "checkIn", token);
+    if (!profile) return response.status(401).json({ error: "This check-in code is invalid or expired." });
+
+    recordAttendance(db, profile.id, today());
+    return response.json(attendanceSummary(db, profile));
+  });
+
+  app.post("/api/attendance/profile", (request, response) => {
+    const token = requiredText(request.body?.token);
+    if (!token) return response.status(400).json({ error: "A profile code is required." });
+
+    const profile = findUserByToken(db, "profile", token);
+    if (!profile) return response.status(404).json({ error: "Profile not found." });
+
+    return response.json({
+      profile: {
+        id: profile.id,
+        name: profile.name,
+        linkedin: profile.linkedin,
+        website: profile.website,
+        profession: profile.profession,
+      },
+    });
+  });
+
+  // The site always reads a JSON body, so a body it cannot parse and an
+  // unexpected failure answer in JSON too, not with Express's HTML page.
+  const jsonErrors: express.ErrorRequestHandler = (error, _request, response, _next) => {
+    const status = Number(error?.status);
+    if (status >= 400 && status < 500) {
+      return response.status(status).json({ error: "The request could not be read." });
+    }
+    console.error(error);
+    return response.status(500).json({ error: "Something went wrong. Please try again." });
+  };
+  app.use(jsonErrors);
 
   return app;
 }
