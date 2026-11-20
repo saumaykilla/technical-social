@@ -42,10 +42,13 @@ Every route is a JSON `POST` and answers in JSON. A failure is a non-2xx status 
 | --- | --- | --- |
 | `/api/attendance/lookup` | `email`, optional `event` | Checks the profile in. `404` with `registrationRequired: true` when the email has no profile. |
 | `/api/attendance/register` | `email`, `name`, `linkedin`, optional `website`, `profession`, `event` | Creates the profile and checks it in. An email that already has a profile is checked in as it is. |
+| `/api/attendance/update` | `email`, `name`, `linkedin`, optional `website`, `profession` | Replaces the name, LinkedIn, website, and profession for that email. An empty `website` or `profession` clears it. No visit, and the email and tokens stay the same. `404` when the email has no profile. |
 | `/api/attendance/redeem` | `token` (a check-in token) | Checks the token's owner in to the open event. `401` for any other token. |
 | `/api/attendance/profile` | `token` (a profile token) | Returns the owner's name and links. No email, no visit. `404` for any other token. |
 
-Lookup, register, and redeem return `{ profile, visits, tokens }`. `tokens.checkIn` and `tokens.profile` go into the two personal QR codes.
+Lookup, register, update, and redeem return `{ profile, visits, tokens }`. `tokens.checkIn` and `tokens.profile` go into the two personal QR codes.
+
+Each attendee in `visits` carries `visitCount`, the number of events that person has attended in all, including events that are not in the response. The site marks someone "First time" when it is exactly 1.
 
 ## Events
 
@@ -81,4 +84,4 @@ The id lives in the instance's database, so one printed on another machine will 
 - New registrations insert the user and their first attendance row in one transaction.
 - Other attendees' email addresses are not included in the attendee list response.
 
-Typing an email does not prove ownership of that email. Anyone who knows or guesses a registered email can check in as that attendee, see the attendee lists for their visit dates, and receive their tokens. A check-in token checks its owner in and returns the same response, so treat it like the email. A profile token only reveals the owner's name and links.
+Typing an email does not prove ownership of that email. Anyone who knows or guesses a registered email can check in as that attendee, see the attendee lists for their visit dates, receive their tokens, and change the name and links other attendees see for them. A check-in token checks its owner in and returns the same response, so treat it like the email. A profile token only reveals the owner's name and links.

@@ -14,7 +14,8 @@ export type Profile = {
   profession: string | null;
 };
 
-export type Attendee = Omit<Profile, "email">;
+/** A person on a date's list. `visitCount` is how many events they have attended in all. */
+export type Attendee = Omit<Profile, "email"> & { visitCount: number };
 
 export type Registration = {
   name: string;
@@ -167,10 +168,24 @@ export function registerAndAttend(db: AttendanceDatabase, registration: Registra
   }
 }
 
+/**
+ * Replaces the name, LinkedIn, website, and profession stored for the email.
+ * Returns the updated profile, or undefined when the email has no profile.
+ */
+export function updateProfile(db: AttendanceDatabase, changes: Registration): Profile | undefined {
+  db.prepare(`
+    update users
+    set name = ?, linkedin = ?, website = ?, profession = ?
+    where email = ?
+  `).run(changes.name, changes.linkedin, changes.website, changes.profession, changes.email);
+  return findUserByEmail(db, changes.email);
+}
+
 export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
   const rows = db.prepare(`
     select a.date as date, u.id as id, u.name as name, u.linkedin as linkedin,
-           u.website as website, u.profession as profession
+           u.website as website, u.profession as profession,
+           (select count(*) from attendance visits where visits.user_id = u.id) as visitCount
     from attendance a
     join users u on u.id = a.user_id
     where a.date in (select date from attendance where user_id = ?)
@@ -186,6 +201,7 @@ export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
       linkedin: row.linkedin,
       website: row.website,
       profession: row.profession,
+      visitCount: row.visitCount,
     };
     if (current?.date === row.date) current.attendees.push(attendee);
     else visits.push({ date: row.date, attendees: [attendee] });

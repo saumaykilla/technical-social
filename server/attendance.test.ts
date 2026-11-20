@@ -77,6 +77,7 @@ test("register stores a profile and checks the attendee in for today's date", as
       linkedin: "https://www.linkedin.com/in/ada",
       website: "https://ada.example",
       profession: "Engineer",
+      visitCount: 1,
     }],
   }]);
   assert.equal("email" in body.visits[0].attendees[0], false);
@@ -197,6 +198,128 @@ test("register then lookup returns one visit for today and the same two tokens",
   assert.notEqual(first.body.tokens.checkIn, first.body.tokens.profile);
   assert.deepEqual(first.body.tokens, registered.body.tokens);
   assert.deepEqual(second.body.tokens, registered.body.tokens);
+});
+
+test("visitCount is the number of events a person has attended, not the rows in the response", async (t) => {
+  let current = new Date("2026-11-18T15:00:00.000Z");
+  const { url } = await start(t, () => current);
+  const counts = (body: { visits: { date: string; attendees: { name: string; visitCount: number }[] }[] }) =>
+    body.visits.map((visit) => [visit.date, Object.fromEntries(visit.attendees.map((a) => [a.name, a.visitCount]))]);
+
+  await post(url, "/api/attendance/register", registration);
+  await post(url, "/api/attendance/register", grace);
+
+  current = new Date("2026-12-02T15:00:00.000Z");
+  await post(url, "/api/attendance/lookup", { email: "ada@example.com" });
+  const ada = await post(url, "/api/attendance/lookup", { email: "ada@example.com" });
+  assert.deepEqual(counts(ada.body), [
+    ["2026-12-02", { "Ada Lovelace": 2 }],
+    ["2026-11-18", { "Ada Lovelace": 2, "Grace Hopper": 1 }],
+  ]);
+
+  // A newcomer's response holds only tonight, where Ada is still on her second event.
+  const hedy = await post(url, "/api/attendance/register", {
+    email: "hedy@example.com",
+    name: "Hedy Lamarr",
+    linkedin: "https://www.linkedin.com/in/hedy",
+  });
+  assert.deepEqual(counts(hedy.body), [["2026-12-02", { "Ada Lovelace": 2, "Hedy Lamarr": 1 }]]);
+
+  const redeemed = await post(url, "/api/attendance/redeem", { token: hedy.body.tokens.checkIn });
+  assert.deepEqual(counts(redeemed.body), counts(hedy.body));
+});
+
+test("update changes the profile everywhere it is shown and nothing else", async (t) => {
+  let current = new Date("2026-11-18T15:00:00.000Z");
+  const { db, url } = await start(t, () => current);
+  const registered = await post(url, "/api/attendance/register", registration);
+  const graceRegistered = await post(url, "/api/attendance/register", grace);
+
+  // A later day: an update must not check anyone in.
+  current = new Date("2026-12-02T15:00:00.000Z");
+  const { status, body } = await post(url, "/api/attendance/update", {
+    email: " ADA@example.com ",
+    name: " Ada King ",
+    linkedin: "https://www.linkedin.com/in/king",
+    website: "",
+    profession: "",
+    event: "evt_ignored",
+  });
+
+  assert.equal(status, 200);
+  assert.deepEqual(body.profile, {
+    id: registered.body.profile.id,
+    name: "Ada King",
+    email: "ada@example.com",
+    linkedin: "https://www.linkedin.com/in/king",
+    website: null,
+    profession: null,
+  });
+  assert.deepEqual(body.tokens, registered.body.tokens);
+  assert.deepEqual(body.visits, [{
+    date: "2026-11-18",
+    attendees: [
+      {
+        id: registered.body.profile.id,
+        name: "Ada King",
+        linkedin: "https://www.linkedin.com/in/king",
+        website: null,
+        profession: null,
+        visitCount: 1,
+      },
+      {
+        id: graceRegistered.body.profile.id,
+        name: "Grace Hopper",
+        linkedin: grace.linkedin,
+        website: null,
+        profession: null,
+        visitCount: 1,
+      },
+    ],
+  }]);
+  assert.equal(count(db, "attendance"), 2);
+  assert.equal(count(db, "users"), 2);
+
+  // Everyone else sees the new details too.
+  const seenByGrace = await post(url, "/api/attendance/lookup", { email: grace.email });
+  assert.equal(seenByGrace.body.visits.at(-1).attendees[0].name, "Ada King");
+  const scanned = await post(url, "/api/attendance/profile", { token: registered.body.tokens.profile });
+  assert.equal(scanned.body.profile.name, "Ada King");
+  assert.equal(scanned.body.profile.linkedin, "https://www.linkedin.com/in/king");
+
+  const restored = await post(url, "/api/attendance/update", { ...registration, profession: "Mathematician" });
+  assert.equal(restored.body.profile.website, "https://ada.example");
+  assert.equal(restored.body.profile.profession, "Mathematician");
+});
+
+test("update rejects an unknown email and an incomplete profile without changing anything", async (t) => {
+  const { db, url } = await start(t);
+  const registered = await post(url, "/api/attendance/register", registration);
+
+  const unknown = await post(url, "/api/attendance/update", { ...grace });
+  assert.equal(unknown.status, 404);
+  assert.deepEqual(unknown.body, { error: "Check in again to update your profile." });
+  assert.equal(count(db, "users"), 1);
+
+  const valid = { email: "ada@example.com", name: "Ada King", linkedin: "https://www.linkedin.com/in/king" };
+  const invalid = [
+    { ...valid, name: "" },
+    { ...valid, name: undefined },
+    { ...valid, linkedin: "" },
+    { ...valid, linkedin: "not-a-url" },
+    { ...valid, linkedin: "javascript:alert(1)" },
+    { ...valid, website: "not-a-url" },
+    { ...valid, email: "not-an-email" },
+    { ...valid, email: undefined },
+  ];
+  for (const body of invalid) {
+    const response = await post(url, "/api/attendance/update", body);
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.equal(typeof response.body.error, "string");
+  }
+
+  const after = await post(url, "/api/attendance/lookup", { email: "ada@example.com" });
+  assert.deepEqual(after.body, registered.body);
 });
 
 test("each person gets their own tokens, including profiles stored before tokens existed", async (t) => {

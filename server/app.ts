@@ -8,9 +8,13 @@ import {
   findUserByToken,
   recordAttendance,
   registerAndAttend,
+  updateProfile,
   type AttendanceDatabase,
+  type Registration,
 } from "./db.ts";
 
+const invalidProfile =
+  "Name, a valid email, and LinkedIn URL are required. Website must also be a valid URL when provided.";
 const unknownEvent = "This event code is not recognized.";
 const closedEvent = "This check-in link is for a different event. Scan tonight's door code to check in.";
 
@@ -66,27 +70,24 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
   });
 
   app.post("/api/attendance/register", (request, response) => {
-    const email = normalizedEmail(request.body?.email);
-    const name = requiredText(request.body?.name);
-    const linkedin = requiredText(request.body?.linkedin);
-    const website = optionalText(request.body?.website);
-
-    if (!email || !name || !linkedin || !isHttpUrl(linkedin) || (website && !isHttpUrl(website))) {
-      return response.status(400).json({
-        error: "Name, a valid email, and LinkedIn URL are required. Website must also be a valid URL when provided.",
-      });
-    }
+    const registration = profileFields(request.body);
+    if (!registration) return response.status(400).json({ error: invalidProfile });
 
     const visit = openEvent(request.body?.event);
     if ("error" in visit) return response.status(400).json({ error: visit.error });
 
-    const profile = registerAndAttend(db, {
-      name,
-      email,
-      linkedin,
-      website,
-      profession: optionalText(request.body?.profession),
-    }, visit.date);
+    const profile = registerAndAttend(db, registration, visit.date);
+    return response.json(attendanceSummary(db, profile));
+  });
+
+  // Edits a profile. The email picks the profile and is never changed, and no visit is recorded.
+  app.post("/api/attendance/update", (request, response) => {
+    const changes = profileFields(request.body);
+    if (!changes) return response.status(400).json({ error: invalidProfile });
+
+    const profile = updateProfile(db, changes);
+    if (!profile) return response.status(404).json({ error: "Check in again to update your profile." });
+
     return response.json(attendanceSummary(db, profile));
   });
 
@@ -132,6 +133,18 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
   app.use(jsonErrors);
 
   return app;
+}
+
+/** The profile in a register or update body, or null when a required field is missing or a URL is malformed. */
+function profileFields(body: unknown): Registration | null {
+  const fields = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+  const email = normalizedEmail(fields.email);
+  const name = requiredText(fields.name);
+  const linkedin = requiredText(fields.linkedin);
+  const website = optionalText(fields.website);
+
+  if (!email || !name || !linkedin || !isHttpUrl(linkedin) || (website && !isHttpUrl(website))) return null;
+  return { email, name, linkedin, website, profession: optionalText(fields.profession) };
 }
 
 function normalizedEmail(value: unknown): string | null {
