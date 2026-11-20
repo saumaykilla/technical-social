@@ -23,7 +23,7 @@ import {
   type Person,
   type TokenKind,
 } from "./db.ts";
-import { invalidProfile, normalizedEmail, profileFields } from "./validation.ts";
+import { normalizedEmail, profileFields } from "./validation.ts";
 
 export type AdminIo = {
   /** Opens the database. Called once a command is known to be well-formed. */
@@ -244,7 +244,7 @@ const commands: Record<string, Command> = {
       }
 
       const next = profileFields({ ...person, ...Object.fromEntries(given.map((field) => [field, flags[field]])) });
-      if (!next) throw new AdminError(invalidProfile);
+      if ("error" in next) throw new AdminError(next.error);
       const changed = editable.filter((field) => next[field] !== person[field]);
       if (changed.length === 0) return io.out(`${label(person)} already has those values.`);
 

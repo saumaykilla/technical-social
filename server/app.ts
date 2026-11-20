@@ -11,7 +11,7 @@ import {
   updateProfile,
   type AttendanceDatabase,
 } from "./db.ts";
-import { invalidProfile, normalizedEmail, profileFields, requiredText } from "./validation.ts";
+import { normalizedEmail, profileFields, requiredText } from "./validation.ts";
 
 const unknownEvent = "This event code is not recognized.";
 const closedEvent = "This check-in link is for a different event. Scan tonight's door code to check in.";
@@ -69,7 +69,7 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
 
   app.post("/api/attendance/register", (request, response) => {
     const registration = profileFields(request.body);
-    if (!registration) return response.status(400).json({ error: invalidProfile });
+    if ("error" in registration) return response.status(400).json({ error: registration.error });
 
     const visit = openEvent(request.body?.event);
     if ("error" in visit) return response.status(400).json({ error: visit.error });
@@ -79,9 +79,10 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
   });
 
   // Edits a profile. The email picks the profile and is never changed, and no visit is recorded.
+  // The site sends every field. An intro or tags key that is missing leaves that one as it is stored.
   app.post("/api/attendance/update", (request, response) => {
     const changes = profileFields(request.body);
-    if (!changes) return response.status(400).json({ error: invalidProfile });
+    if ("error" in changes) return response.status(400).json({ error: changes.error });
 
     const profile = updateProfile(db, changes);
     if (!profile) return response.status(404).json({ error: "Check in again to update your profile." });
@@ -114,6 +115,8 @@ export function createApp(db: AttendanceDatabase, now: () => Date = () => new Da
         linkedin: profile.linkedin,
         website: profile.website,
         profession: profile.profession,
+        intro: profile.intro,
+        tags: profile.tags,
       },
     });
   });

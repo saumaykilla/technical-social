@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Tag } from "./validation.ts";
 
 export type AttendanceDatabase = DatabaseSync;
 
@@ -12,24 +13,43 @@ export type Profile = {
   linkedin: string;
   website: string | null;
   profession: string | null;
+  intro: string | null;
+  /** Topic ids without duplicates, in the order the site lists them. */
+  tags: Tag[];
 };
 
 /** A person on a date's list. `visitCount` is how many events they have attended in all. */
 export type Attendee = Omit<Profile, "email"> & { visitCount: number };
 
+/**
+ * The fields a registration or an edit sets. A registration without `intro`
+ * or `tags` stores none. An edit without one keeps what is stored.
+ */
 export type Registration = {
   name: string;
   email: string;
   linkedin: string;
   website: string | null;
   profession: string | null;
+  intro?: string | null;
+  tags?: Tag[];
 };
+
+/** A profile as its `users` row holds it, with the topics as a JSON array. */
+type ProfileRow = Omit<Profile, "tags"> & { tags: string };
 
 const tokenKinds = ["checkIn", "profile"] as const;
 
 export type TokenKind = (typeof tokenKinds)[number];
 
 export type Tokens = Record<TokenKind, string>;
+
+// Columns `users` gained after the first deploy. A database from before then gets them when it is opened.
+const laterUserColumns = {
+  intro: "text check (length(intro) <= 140)",
+  // A JSON array of topic ids.
+  tags: "text not null default '[]'",
+};
 
 // An event is an opaque id for one calendar date, so (user_id, date) on
 // attendance is also the one-visit-per-person-per-event constraint.
@@ -41,7 +61,9 @@ const schema = `
     linkedin text not null check (length(trim(linkedin)) > 0),
     website text,
     profession text,
-    created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    intro ${laterUserColumns.intro},
+    tags ${laterUserColumns.tags}
   );
 
   create table if not exists attendance (
@@ -80,15 +102,50 @@ export function openDatabase(filename: string): AttendanceDatabase {
   db.exec("PRAGMA busy_timeout = 5000");
   if (filename !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
   db.exec(schema);
+  addUserColumns(db);
   return db;
 }
 
+/** Brings a `users` table created by an earlier version up to the schema. Existing rows get no intro and no topics. */
+function addUserColumns(db: AttendanceDatabase): void {
+  const missing = () => {
+    const present = db.prepare("select name from pragma_table_info('users')").all() as { name: string }[];
+    return Object.entries(laterUserColumns).filter(([name]) => !present.some((column) => column.name === name));
+  };
+  if (missing().length === 0) return;
+
+  // The API and the admin command can open the file at the same moment, so look again once the write lock is held.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const [name, definition] of missing()) db.exec(`alter table users add column ${name} ${definition}`);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+const profileColumns = `
+  u.id as id, u.name as name, u.email as email, u.linkedin as linkedin,
+  u.website as website, u.profession as profession, u.intro as intro, u.tags as tags
+`;
+
+function profileFromRow(row: ProfileRow): Profile {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    linkedin: row.linkedin,
+    website: row.website,
+    profession: row.profession,
+    intro: row.intro,
+    tags: JSON.parse(row.tags) as Tag[],
+  };
+}
+
 export function findUserByEmail(db: AttendanceDatabase, email: string): Profile | undefined {
-  return db.prepare(`
-    select id, name, email, linkedin, website, profession
-    from users
-    where email = ?
-  `).get(email) as Profile | undefined;
+  const row = db.prepare(`select ${profileColumns} from users u where u.email = ?`).get(email) as ProfileRow | undefined;
+  return row && profileFromRow(row);
 }
 
 /**
@@ -99,22 +156,14 @@ export function findUserByEmail(db: AttendanceDatabase, email: string): Profile 
 export function findUserByToken(db: AttendanceDatabase, kind: TokenKind, token: string): Profile | undefined {
   const presented = tokenDigest(token);
   const row = db.prepare(`
-    select u.id as id, u.name as name, u.email as email, u.linkedin as linkedin,
-           u.website as website, u.profession as profession, t.token as token
+    select ${profileColumns}, t.token as token
     from tokens t
     join users u on u.id = t.user_id
     where t.kind = ? and t.digest = ?
-  `).get(kind, presented.toString("hex")) as (Profile & { token: string }) | undefined;
+  `).get(kind, presented.toString("hex")) as (ProfileRow & { token: string }) | undefined;
   if (!row || !timingSafeEqual(tokenDigest(row.token), presented)) return undefined;
 
-  return {
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    linkedin: row.linkedin,
-    website: row.website,
-    profession: row.profession,
-  };
+  return profileFromRow(row);
 }
 
 /** The date of an issued event, or undefined when the id was never issued. */
@@ -144,16 +193,28 @@ export function recordAttendance(db: AttendanceDatabase, userId: string, date: s
   return Number(changes) > 0;
 }
 
-/** Checks the email's profile in for `date`, creating the profile first when the email is new. */
+/**
+ * Checks the email's profile in for `date`, creating the profile first when the email is new.
+ * A profile that already exists is returned as it is stored, whatever the registration says.
+ */
 export function registerAndAttend(db: AttendanceDatabase, registration: Registration, date: string): Profile {
   db.exec("BEGIN IMMEDIATE");
   try {
     let profile = findUserByEmail(db, registration.email);
     if (!profile) {
-      profile = { id: crypto.randomUUID(), ...registration };
+      profile = {
+        id: crypto.randomUUID(),
+        name: registration.name,
+        email: registration.email,
+        linkedin: registration.linkedin,
+        website: registration.website,
+        profession: registration.profession,
+        intro: registration.intro ?? null,
+        tags: registration.tags ?? [],
+      };
       db.prepare(`
-        insert into users (id, name, email, linkedin, website, profession)
-        values (?, ?, ?, ?, ?, ?)
+        insert into users (id, name, email, linkedin, website, profession, intro, tags)
+        values (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         profile.id,
         profile.name,
@@ -161,6 +222,8 @@ export function registerAndAttend(db: AttendanceDatabase, registration: Registra
         profile.linkedin,
         profile.website,
         profile.profession,
+        profile.intro,
+        JSON.stringify(profile.tags),
       );
     }
     recordAttendance(db, profile.id, date);
@@ -173,40 +236,46 @@ export function registerAndAttend(db: AttendanceDatabase, registration: Registra
 }
 
 /**
- * Replaces the name, LinkedIn, website, and profession stored for the email.
+ * Replaces the name, LinkedIn, website, and profession stored for the email,
+ * and the intro and topics when the changes include them.
  * Returns the updated profile, or undefined when the email has no profile.
  */
 export function updateProfile(db: AttendanceDatabase, changes: Registration): Profile | undefined {
   db.prepare(`
     update users
-    set name = ?, linkedin = ?, website = ?, profession = ?
+    set name = ?, linkedin = ?, website = ?, profession = ?,
+        intro = case when ? then ? else intro end,
+        tags = coalesce(?, tags)
     where email = ?
-  `).run(changes.name, changes.linkedin, changes.website, changes.profession, changes.email);
+  `).run(
+    changes.name,
+    changes.linkedin,
+    changes.website,
+    changes.profession,
+    changes.intro === undefined ? 0 : 1,
+    changes.intro ?? null,
+    changes.tags ? JSON.stringify(changes.tags) : null,
+    changes.email,
+  );
   return findUserByEmail(db, changes.email);
 }
 
 export function attendanceSummary(db: AttendanceDatabase, profile: Profile) {
   const rows = db.prepare(`
-    select a.date as date, u.id as id, u.name as name, u.linkedin as linkedin,
-           u.website as website, u.profession as profession,
+    select a.date as date, ${profileColumns},
            (select count(*) from attendance visits where visits.user_id = u.id) as visitCount
     from attendance a
     join users u on u.id = a.user_id
     where a.date in (select date from attendance where user_id = ?)
     order by a.date desc, a.rowid asc
-  `).all(profile.id) as Array<Attendee & { date: string }>;
+  `).all(profile.id) as Array<ProfileRow & { date: string; visitCount: number }>;
 
   const visits: { date: string; attendees: Attendee[] }[] = [];
   for (const row of rows) {
     const current = visits.at(-1);
-    const attendee = {
-      id: row.id,
-      name: row.name,
-      linkedin: row.linkedin,
-      website: row.website,
-      profession: row.profession,
-      visitCount: row.visitCount,
-    };
+    // Everyone on the list sees these rows, so the email stays out of them.
+    const { email: _email, ...shown } = profileFromRow(row);
+    const attendee = { ...shown, visitCount: row.visitCount };
     if (current?.date === row.date) current.attendees.push(attendee);
     else visits.push({ date: row.date, attendees: [attendee] });
   }
@@ -237,15 +306,17 @@ function tokenDigest(token: string): Buffer {
   return createHash("sha256").update(token).digest();
 }
 
-// Everything below is used only by the admin command.
+// Everything below is used only by the admin command, which does not list intros or topics.
 
-export type Person = Profile & {
+type Contact = Omit<Profile, "intro" | "tags">;
+
+export type Person = Contact & {
   createdAt: string;
   visitCount: number;
   lastVisit: string | null;
 };
 
-export type CheckIn = Profile & {
+export type CheckIn = Contact & {
   visitCount: number;
   /** 1 when the person had attended no earlier event, otherwise 0. */
   firstTime: number;

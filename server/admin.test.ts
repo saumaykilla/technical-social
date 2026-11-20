@@ -330,6 +330,8 @@ test("edit changes the fields it is given, including the email, and keeps visits
     linkedin: ada.linkedin,
     website: null,
     profession: "Mathematician",
+    intro: null,
+    tags: [],
   });
   assert.deepEqual(after.tokens, before.tokens);
   assert.deepEqual(after.visits.map((visit) => visit.date), ["2026-11-20", "2026-11-06"]);
@@ -337,6 +339,27 @@ test("edit changes the fields it is given, including the email, and keeps visits
   const same = await admin("edit", "ada.king@example.com", "--name", "Ada King");
   assert.equal(same.code, 0);
   assert.equal(same.out, "Ada King <ada.king@example.com> already has those values.");
+});
+
+test("edit leaves the intro and topics the attendee chose as they are", async () => {
+  const { db, admin } = seeded();
+  registerAndAttend(db, {
+    email: "hedy@example.com",
+    name: "Hedy Lamarr",
+    linkedin: "https://www.linkedin.com/in/hedy",
+    website: null,
+    profession: null,
+    intro: "Looking for a cofounder",
+    tags: ["llms", "hiring"],
+  }, "2026-11-20");
+
+  const { code } = await admin("edit", "hedy@example.com", "--name", "Hedy Kiesler", "--email", "kiesler@example.com");
+
+  assert.equal(code, 0);
+  const after = findUserByEmail(db, "kiesler@example.com")!;
+  assert.equal(after.name, "Hedy Kiesler");
+  assert.equal(after.intro, "Looking for a cofounder");
+  assert.deepEqual(after.tags, ["llms", "hiring"]);
 });
 
 test("edit refuses values the API would refuse and an email that is taken", async () => {

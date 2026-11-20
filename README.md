@@ -41,14 +41,23 @@ Every route is a JSON `POST` and answers in JSON. A failure is a non-2xx status 
 | Route | Body | Result |
 | --- | --- | --- |
 | `/api/attendance/lookup` | `email`, optional `event` | Checks the profile in. `404` with `registrationRequired: true` when the email has no profile. |
-| `/api/attendance/register` | `email`, `name`, `linkedin`, optional `website`, `profession`, `event` | Creates the profile and checks it in. An email that already has a profile is checked in as it is. |
-| `/api/attendance/update` | `email`, `name`, `linkedin`, optional `website`, `profession` | Replaces the name, LinkedIn, website, and profession for that email. An empty `website` or `profession` clears it. No visit, and the email and tokens stay the same. `404` when the email has no profile. |
+| `/api/attendance/register` | `email`, `name`, `linkedin`, optional `website`, `profession`, `intro`, `tags`, `event` | Creates the profile and checks it in. An email that already has a profile is checked in as it is, and nothing in the request overwrites it. |
+| `/api/attendance/update` | `email`, `name`, `linkedin`, optional `website`, `profession`, `intro`, `tags` | Replaces the name, LinkedIn, website, profession, intro, and topics for that email. An empty `website`, `profession`, or `intro` clears it, and `tags: []` clears the topics. No visit, and the email and tokens stay the same. `404` when the email has no profile. |
 | `/api/attendance/redeem` | `token` (a check-in token) | Checks the token's owner in to the open event. `401` for any other token. |
-| `/api/attendance/profile` | `token` (a profile token) | Returns the owner's name and links. No email, no visit. `404` for any other token. |
+| `/api/attendance/profile` | `token` (a profile token) | Returns the owner's name, links, intro, and topics. No email, no visit. `404` for any other token. |
 
 Lookup, register, update, and redeem return `{ profile, visits, tokens }`. `tokens.checkIn` and `tokens.profile` go into the two personal QR codes.
 
 Each attendee in `visits` carries `visitCount`, the number of events that person has attended in all, including events that are not in the response. The site marks someone "First time" when it is exactly 1.
+
+### Intro and topics
+
+Every profile and every attendee row has `intro` and `tags`, also when the person has neither: `intro` is then `null` and `tags` is `[]`.
+
+- `intro` is at most 140 characters, counted after trimming the way the site's `maxLength` counts them. A longer one is a `400`.
+- `tags` is an array of topic ids: `ml`, `llms`, `web`, `data`, `hiring`, `job-hunting`. Any other id, or a value that is not an array, is a `400`. Duplicates are dropped and the ids come back in that order.
+- On register, a missing `intro` or `tags` stores none.
+- On update, a missing `intro` or `tags` key leaves that field as it is stored, so a page loaded before the site knew about them cannot erase them. The site always sends both.
 
 ## Events
 
@@ -95,7 +104,7 @@ npm run admin -- backup                          # data/attendance-backup-<time>
 ```
 
 - `rotate` and `delete` cannot be undone, so they ask before acting. Add `--yes` to skip the question, which a script with no terminal has to do.
-- `edit` applies the same rules as the API and is the only way to change an email. Visits and QR codes stay with the profile.
+- `edit` applies the same rules as the API and is the only way to change an email. Visits and QR codes stay with the profile. It does not show or change the intro and topics.
 - `backup` is safe while the API is running. Copying the `.sqlite` file by hand is not, because recent writes may still be in the `-wal` file beside it.
 - For a spreadsheet, add `--csv` to `attendees` or `people` and use `npm run -s` so npm prints nothing of its own:
 
@@ -105,7 +114,7 @@ npm run admin -- backup                          # data/attendance-backup-<time>
 
 ## Data and behavior
 
-- `users` stores the required name, unique email, and LinkedIn URL, plus optional website and profession.
+- `users` stores the required name, unique email, and LinkedIn URL, plus optional website, profession, intro, and topics. A database created before intros and topics existed gains the two columns the next time the API or the admin command opens it.
 - `attendance` stores a date and a user ID. A unique constraint prevents duplicate check-ins by the same attendee on one date, so checking in again for the same event returns the same visit.
 - `events` stores the id issued for each date.
 - `tokens` stores each attendee's check-in token and profile token. They are created the first time the attendee is returned and stay the same after that. To rotate one, use `npm run admin -- rotate`; the old value stops working at once.
@@ -113,4 +122,4 @@ npm run admin -- backup                          # data/attendance-backup-<time>
 - New registrations insert the user and their first attendance row in one transaction.
 - Other attendees' email addresses are not included in the attendee list response.
 
-Typing an email does not prove ownership of that email. Anyone who knows or guesses a registered email can check in as that attendee, see the attendee lists for their visit dates, receive their tokens, and change the name and links other attendees see for them. A check-in token checks its owner in and returns the same response, so treat it like the email. A profile token only reveals the owner's name and links.
+Typing an email does not prove ownership of that email. Anyone who knows or guesses a registered email can check in as that attendee, see the attendee lists for their visit dates, receive their tokens, and change the name, links, intro, and topics other attendees see for them. A check-in token checks its owner in and returns the same response, so treat it like the email. A profile token only reveals the owner's name and links.
